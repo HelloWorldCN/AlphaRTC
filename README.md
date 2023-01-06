@@ -132,11 +132,44 @@ Note: all commands below work for both Linux (sh) and Windows (pwsh), unless oth
     
 ## Demo
 
-AlphaRTC consists of many different components. `peerconnection_serverless` is an application for demo purposes that comes with AlphaRTC. It establishes RTC communication with another peer without the need of a server.
+AlphaRTC consists of many different components. `peerconnection_serverless` is an application for demo purposes that comes with AlphaRTC. It establishes RTC communication with another peer without the need of a server. 这个peerconnection_serverless实际上是一个python脚本，该脚本在运行时启动了webrtc的peerconnection例子，当然这个例子被修改了一点
+这个可以参考makefile文件中的定义
+原始的python处理代码是通过获得启动的peerconnection的日志输出stdout来获得网络状况state信息的，具体可以参考
+[peerconnection_serverless](examples/peerconnection/serverless/peerconnection_serverless)
+
+webrtc源码中的[modules/third_party/cmdinfer/cmdinfer.cc](modules/third_party/cmdinfer/cmdinfer.cc)实现了控制台的输入和输出，python代码给出的预测数据也是通过控制台管道输入的方式让c++代码获得的，如下所示
+``` c++
+float cmdinfer::GetEstimatedBandwidth() {
+    std::uint64_t bandwidth = 0;
+    std::cout << RequestBandwidthCommand << std::endl;
+    std::cin >> bandwidth;
+    return static_cast<float>(bandwidth);
+}
+``` 
 
 In order to run the application, you will need a configuration file in json format. The details are explained in the next chapter.
 
 In addition to the config file, you will also need other files, such as video/audio source files and an ONNX model.
+onnx模型的加载和运行是通过修改webrtc代码中的
+[remote_estimator_proxy.cc](modules/remote_bitrate_estimator/remote_estimator_proxy.cc)
+中的回调函数完成的数据收集,代码如下所示
+``` c++
+  if (onnx_infer_) {
+    onnxinfer::OnReceived(onnx_infer_, header.payloadType, header.sequenceNumber,
+                          send_time_ms, header.ssrc, header.paddingLength,
+                          header.headerLength, arrival_time_ms, payload_size, -1, -1);
+  } else {
+    cmdinfer::ReportStates(
+        send_time_ms,
+        arrival_time_ms,
+        payload_size,
+        header.payloadType,
+        header.sequenceNumber,
+        header.ssrc,
+        header.paddingLength,
+        header.headerLength);
+  }
+``` 
 
 To run an AlphaRTC instance, put the config files in a directory, e.g., `config_files`, then mount it to an endpoint inside `alphartc` container
 
