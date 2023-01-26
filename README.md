@@ -137,7 +137,98 @@ AlphaRTC consists of many different components. `peerconnection_serverless` is a
 原始的python处理代码是通过获得启动的peerconnection的日志输出stdout来获得网络状况state信息的，具体可以参考
 [peerconnection_serverless](examples/peerconnection/serverless/peerconnection_serverless)
 
+这个peerconnection_serverless的代码核心部分如下
+``` python
+import cmdinfer
+
+
+def main():
+    app = subprocess.Popen(
+        ["peerconnection_serverless.origin"] + sys.argv[1:],
+        bufsize=1,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT)
+    try:
+        #启动cmdinfer类来从控制台获得webrtc sample peerconnection的输出，同时给出模型预测的带宽
+        cmdinfer.main(app.stdout, app.stdin) #
+        app.wait()
+    except:
+        app.terminate()
+        app.wait()
+        error_message = traceback.format_exc()
+        error_message = "\n{}".format(error_message)
+        sys.stderr.write(error_message)
+        if len(sys.argv[1:]) == 0:
+            return
+        config_file = sys.argv[1]
+        config_file = json.load(open(config_file, "r"))
+        if "logging" not in config_file:
+            return
+        if "enabled" not in config_file["logging"] or not config_file["logging"]["enabled"]:
+            return
+        with open(config_file["logging"]["log_output_path"], "a") as log_file:
+            log_file.write(error_message)
+
+
+```
+这个[modules/third_party/cmdinfer/cmdinfer.py](modules/third_party/cmdinfer/cmdinfer.py) 类定义如下
+``` python
+RequestBandwidthCommand = "RequestBandwidth"
+
+
+def fetch_stats(line: str)->dict:
+    line = line.strip()
+    try:
+        stats = json.loads(line)
+        return stats
+    except json.decoder.JSONDecodeError:
+        return None
+
+
+def request_estimated_bandwidth(line: str)->bool:
+    line = line.strip()
+    if RequestBandwidthCommand == line:
+        return True
+    return False
+
+
+def find_estimator_class():
+    import BandwidthEstimator #在这里导入了我们定义的类
+    return BandwidthEstimator.Estimator
+
+
+def main(ifd = sys.stdin, ofd = sys.stdout):
+    estimator_class = find_estimator_class()
+    estimator = estimator_class()
+    while True:
+        line = ifd.readline()
+        if not line:
+            break
+        if isinstance(line, bytes):
+            line = line.decode("utf-8")
+        stats = fetch_stats(line)
+        if stats:
+            estimator.report_states(stats)
+            continue
+        request = request_estimated_bandwidth(line)
+        if request:
+            bandwidth = estimator.get_estimated_bandwidth()
+            ofd.write("{}\n".format(int(bandwidth)).encode("utf-8"))
+            ofd.flush()
+            continue
+        sys.stdout.write(line)
+        sys.stdout.flush()
+
+
+if __name__ == '__main__':
+    main()
+``` 
+
+
+### 下面说明webrtc源码中是如何给出相应的网络rtp包数据，如何获得模型给出的预测结果
 webrtc源码中的[modules/third_party/cmdinfer/cmdinfer.cc](modules/third_party/cmdinfer/cmdinfer.cc)实现了控制台的输入和输出，python代码给出的预测数据也是通过控制台管道输入的方式让c++代码获得的，如下所示
+
 ``` c++
 float cmdinfer::GetEstimatedBandwidth() {
     std::uint64_t bandwidth = 0;
